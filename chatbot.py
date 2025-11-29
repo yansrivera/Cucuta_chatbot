@@ -6,82 +6,48 @@ from openai import OpenAI
 from config import PROMPT_SISTEMA
 from dotenv import load_dotenv
 import os
-import asyncio
 
-# --- CARGAR VARIABLES .env ---
+# Cargar variables de entorno
 load_dotenv()
 
 API_KEY = os.getenv("API_KEY")
 BASE_URL = os.getenv("BASE_URL")
-if not API_KEY:
-    print("⚠️ ADVERTENCIA: No se encontró API_KEY en .env")
 
-# --- CLIENTE OPENAI ---
-client = OpenAI(
-    api_key=API_KEY,
-    base_url=BASE_URL  # ej: "https://api.groq.com/openai/v1"
-)
+client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
 
-# --- FASTAPI ---
 app = FastAPI()
 
-# --- CORS ---
+# --- HABILITAR CORS ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # Cambiar a tu dominio en producción
+    allow_origins=["*"],  # En producción cambia esto a tu dominio
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# --- MODELO PARA PETICIONES ---
 class Pregunta(BaseModel):
     pregunta: str
 
-
-# ============================================================
-# 🚀 RUTA POST PARA RESPUESTA NORMAL (SIN STREAMING)
-# ============================================================
 @app.post("/chat")
-async def obtener_respuesta(data: Pregunta):
+async def obtener_respuesta(p: Pregunta):
     try:
-        respuesta = client.chat.completions.create(
-            model="gpt-4o-mini",  # Cambia al modelo que estés usando
+        # Streaming desde la API
+        stream = client.chat.completions.create(
+            model="mistralai/mistral-small-3.1-24b-instruct:free",
             messages=[
                 {"role": "system", "content": PROMPT_SISTEMA},
-                {"role": "user", "content": data.pregunta}
-            ]
+                {"role": "user", "content": p.pregunta}
+            ],
+            stream=True
         )
 
-        return {"respuesta": respuesta.choices[0].message["content"]}
+        def generar():
+            for chunk in stream:
+                if chunk.choices[0].delta and chunk.choices[0].delta.content:
+                    yield chunk.choices[0].delta.content
+
+        return StreamingResponse(generar(), media_type="text/plain")
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-
-# ============================================================
-# 🚀 RUTA PARA STREAMING (OPCIONAL)
-# ============================================================
-@app.post("/stream")
-async def chat_stream(data: Pregunta):
-
-    def generador():
-        try:
-            respuesta = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": PROMPT_SISTEMA},
-                    {"role": "user", "content": data.pregunta}
-                ],
-                stream=True
-            )
-
-            for parte in respuesta:
-                texto = parte.choices[0].delta.get("content", "")
-                if texto:
-                    yield texto
-
-        except Exception as e:
-            yield f"[Error]: {str(e)}"
-
-    return StreamingResponse(generador(), media_type="text/plain")
